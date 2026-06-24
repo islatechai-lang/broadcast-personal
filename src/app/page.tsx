@@ -50,7 +50,7 @@ const formatPreviewHtml = (text: string) => {
   if (!text) return "";
   
   // Escape HTML tags to prevent XSS in mock view
-  let escaped = text
+  const escaped = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
@@ -59,7 +59,7 @@ const formatPreviewHtml = (text: string) => {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   
   // Replace links with styled buttons
-  let formatted = escaped.replace(urlRegex, (url) => {
+  const formatted = escaped.replace(urlRegex, (url) => {
     const cleanUrl = url.replace(/[.,;:!?)]+$/, "");
     let label = "Visit Link";
     if (cleanUrl.includes("whop.com")) {

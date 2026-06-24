@@ -10,7 +10,7 @@ function formatMessageToHtml(text: string): string {
   const urlRegex = /(https?:\/\/[^\s]+)/g;
 
   // Convert links to styled buttons
-  let formattedText = text.replace(urlRegex, (url) => {
+  const formattedText = text.replace(urlRegex, (url) => {
     // Clean trailing punctuation from URL (e.g. dots, commas, parenthesis)
     const cleanUrl = url.replace(/[.,;:!?)]+$/, "");
     let label = "Visit Link";
