@@ -45,6 +45,36 @@ interface ToastMessage {
   type: "success" | "error" | "info" | "warning";
 }
 
+// Helper to format frontend preview HTML (converting URLs to buttons and escaping HTML to prevent XSS)
+const formatPreviewHtml = (text: string) => {
+  if (!text) return "";
+  
+  // Escape HTML tags to prevent XSS in mock view
+  let escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Regex to find links (http/https)
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  
+  // Replace links with styled buttons
+  let formatted = escaped.replace(urlRegex, (url) => {
+    const cleanUrl = url.replace(/[.,;:!?)]+$/, "");
+    let label = "Visit Link";
+    if (cleanUrl.includes("whop.com")) {
+      label = "Join GG33 on Whop";
+    }
+    return `<div style="margin: 16px 0; text-align: center;">
+      <a href="${cleanUrl}" target="_blank" style="display: inline-block; background-color: #F65312; color: #ffffff; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-decoration: none; padding: 10px 24px; border-radius: 6px; font-size: 14px; box-shadow: 0 4px 8px rgba(246, 83, 18, 0.25);">
+        ${label}
+      </a>
+    </div>`;
+  });
+
+  return formatted.replace(/\n/g, '<br />');
+};
+
 export default function Home() {
   // Theme state
   const [isDark, setIsDark] = useState(true);
@@ -673,17 +703,14 @@ export default function Home() {
                     </div>
 
                     {/* Mock Body */}
-                    <div className="p-4 min-h-[160px] text-sm text-slate-700 font-sans whitespace-pre-line leading-relaxed overflow-y-auto max-h-[300px]">
-                      {message || (
+                    <div className="p-4 min-h-[160px] text-sm text-slate-700 font-sans leading-relaxed overflow-y-auto max-h-[300px]">
+                      {message ? (
+                        <div dangerouslySetInnerHTML={{ __html: formatPreviewHtml(message) }} />
+                      ) : (
                         <span className="text-slate-400 italic">
                           No body content yet. As you type in the message text box, it will show up here.
                         </span>
                       )}
-                    </div>
-                    
-                    {/* Mock Footer */}
-                    <div className="bg-slate-50 border-t border-slate-100 px-4 py-2.5 text-[10px] text-slate-400 text-center">
-                      Sent via Bulk Email Sender.
                     </div>
                   </div>
                 </div>

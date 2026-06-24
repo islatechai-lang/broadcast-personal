@@ -4,6 +4,30 @@ import { Resend } from 'resend';
 // Simple email regex for validation
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Helper function to format plain text messages to styled HTML with button links
+function formatMessageToHtml(text: string): string {
+  // Regex to find links (http/https)
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+
+  // Convert links to styled buttons
+  let formattedText = text.replace(urlRegex, (url) => {
+    // Clean trailing punctuation from URL (e.g. dots, commas, parenthesis)
+    const cleanUrl = url.replace(/[.,;:!?)]+$/, "");
+    let label = "Visit Link";
+    if (cleanUrl.includes("whop.com")) {
+      label = "Join GG33 on Whop";
+    }
+    return `<div style="margin: 24px 0; text-align: center;">
+      <a href="${cleanUrl}" target="_blank" style="display: inline-block; background-color: #F65312; color: #ffffff; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-size: 15px; letter-spacing: 0.5px; box-shadow: 0 4px 12px rgba(246, 83, 18, 0.2);">
+        ${label}
+      </a>
+    </div>`;
+  });
+
+  // Replace newlines with <br />
+  return formattedText.replace(/\n/g, '<br />');
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -82,14 +106,10 @@ export async function POST(req: NextRequest) {
             subject: subject,
             text: message,
             html: `
-              <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; background-color: #ffffff; color: #1f2937;">
-                <div style="white-space: pre-line; font-size: 16px; line-height: 1.6; color: #374151;">
-                  ${message.replace(/\n/g, '<br />')}
+              <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff; color: #1f2937;">
+                <div style="font-size: 16px; line-height: 1.6; color: #374151;">
+                  ${formatMessageToHtml(message)}
                 </div>
-                <hr style="margin: 24px 0; border: 0; border-top: 1px solid #e5e7eb;" />
-                <p style="font-size: 12px; color: #9ca3af; text-align: center; margin: 0;">
-                  Sent via Bulk Email Sender.
-                </p>
               </div>
             `,
           });
