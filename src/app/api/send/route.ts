@@ -104,8 +104,10 @@ export async function POST(req: NextRequest) {
             to: email,
             replyTo: replyTo || undefined,
             subject: subject,
-            text: message,
-            html: `
+            text: message.replace(/<[^>]*>/g, ''),
+            html: message.trim().startsWith('<')
+              ? message
+              : `
               <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff; color: #1f2937;">
                 <div style="font-size: 16px; line-height: 1.6; color: #374151;">
                   ${formatMessageToHtml(message)}

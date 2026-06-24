@@ -705,7 +705,7 @@ export default function Home() {
                     {/* Mock Body */}
                     <div className="p-4 min-h-[160px] text-sm text-slate-700 font-sans leading-relaxed overflow-y-auto max-h-[300px]">
                       {message ? (
-                        <div dangerouslySetInnerHTML={{ __html: formatPreviewHtml(message) }} />
+                        <div dangerouslySetInnerHTML={{ __html: message.trim().startsWith('<') ? message : formatPreviewHtml(message) }} />
                       ) : (
                         <span className="text-slate-400 italic">
                           No body content yet. As you type in the message text box, it will show up here.
