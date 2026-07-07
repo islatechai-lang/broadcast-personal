@@ -267,6 +267,12 @@ export default function Home() {
       return;
     }
 
+    // Validate From Email format if provided
+    if (from.trim() && !/^(?:[^<]+<)?[^\s@]+@[^\s@]+\.[^\s@]+>?$/.test(from.trim())) {
+      addToast('Invalid "From Email" — use a full address like noreply@yourdomain.com or Name <noreply@yourdomain.com>', "error");
+      return;
+    }
+
     setShowConfirmModal(true);
   };
 
@@ -473,11 +479,11 @@ export default function Home() {
                       type="text"
                       value={from}
                       onChange={(e) => setFrom(e.target.value)}
-                      placeholder="onboarding@resend.dev"
+                      placeholder="noreply@send.gg33core.space"
                       className="glass-input w-full px-4 py-2.5 rounded-xl text-sm transition-all focus:ring-2"
                     />
                     <span className="block text-[10px] text-slate-500 mt-1">
-                      Leave empty to use Resend&apos;s default onboarding email
+                      Must be a full email address (e.g. noreply@yourdomain.com). Leave empty for Resend&apos;s default.
                     </span>
                   </div>
 

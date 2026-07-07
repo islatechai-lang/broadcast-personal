@@ -4,6 +4,9 @@ import { Resend } from 'resend';
 // Simple email regex for validation
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Regex to validate the `from` field: either "email@domain" or "Name <email@domain>"
+const FROM_REGEX = /^(?:[^<]+<)?[^\s@]+@[^\s@]+\.[^\s@]+>?$/;
+
 // Helper function to format plain text messages to styled HTML with button links
 function formatMessageToHtml(text: string): string {
   // Regex to find links (http/https)
@@ -55,6 +58,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Validate `from` field format if provided
+    if (from && typeof from === 'string' && from.trim() !== '') {
+      const trimmedFrom = from.trim();
+      if (!FROM_REGEX.test(trimmedFrom)) {
+        return NextResponse.json(
+          {
+            error:
+              'Invalid "From Email" format. Use a full email address like "noreply@yourdomain.com" or "Your Name <noreply@yourdomain.com>". A bare domain like "yourdomain.com" is not valid.',
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     // 2. Clean, deduplicate, and validate emails
     // Standardize to lowercase and trim
     const cleanRecipients = recipients.map((r) => String(r).trim().toLowerCase());
@@ -92,8 +109,9 @@ export async function POST(req: NextRequest) {
     const fromEmail = from || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 
     // 4. Send emails in chunked parallel batches to prevent rate limits and avoid serverless timeouts
+    // Resend allows max 10 requests/second, so we send in small batches with a safe delay
     const results = [];
-    const concurrencyLimit = 10;
+    const concurrencyLimit = 2;
 
     for (let i = 0; i < validRecipients.length; i += concurrencyLimit) {
       const chunk = validRecipients.slice(i, i + concurrencyLimit);
@@ -142,9 +160,9 @@ export async function POST(req: NextRequest) {
       const chunkResults = await Promise.all(chunkPromises);
       results.push(...chunkResults);
 
-      // Add a small 100ms delay between chunks to respect rate limits gently
+      // Add a 1-second delay between chunks to stay safely under Resend's 10 req/sec limit
       if (i + concurrencyLimit < validRecipients.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
 
