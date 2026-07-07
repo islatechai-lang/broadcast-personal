@@ -25,6 +25,7 @@ import {
 // Email regex for client-side evaluation
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DRAFT_KEY = "bulk_email_sender_draft";
+const TEST_EMAILS = ["princederder44@gmail.com", "hcker474@gmail.com"];
 
 interface RecipientAnalysis {
   raw: string[];
@@ -198,11 +199,31 @@ export default function Home() {
     campaignHistory.forEach((c) => {
       c.results.forEach((r) => {
         if (r.success) {
-          set.add(r.email.toLowerCase());
+          const emailLower = r.email.toLowerCase();
+          if (!TEST_EMAILS.includes(emailLower)) {
+            set.add(emailLower);
+          }
         }
       });
     });
     return set;
+  }, [campaignHistory]);
+
+  // Calculate successfully sent emails today
+  const successfullySentToday = useMemo(() => {
+    let count = 0;
+    const todayStr = new Date().toDateString();
+    campaignHistory.forEach((c) => {
+      try {
+        const campDate = new Date(c.timestamp);
+        if (campDate.toDateString() === todayStr) {
+          count += c.results.filter((r) => r.success).length;
+        }
+      } catch {
+        // ignore date parse errors
+      }
+    });
+    return count;
   }, [campaignHistory]);
 
   // Exclude previously sent helper
@@ -586,6 +607,14 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Daily Limit Badge */}
+          <div 
+            className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/25 px-3 py-1 rounded-full text-xs text-indigo-400 font-medium"
+            title="Resend free tier limit is 100 emails/day. This count is based on emails sent today from your local history."
+          >
+            Daily Limit: {Math.max(0, 100 - successfullySentToday)} / 100 left
+          </div>
+
           {/* Status Badge */}
           <div className="hidden sm:flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/25 px-3 py-1 rounded-full text-xs text-emerald-400 font-medium">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
