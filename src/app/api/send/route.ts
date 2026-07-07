@@ -34,7 +34,7 @@ function formatMessageToHtml(text: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { from, replyTo, subject, message, recipients } = body;
+    const { from, replyTo, subject, message, recipient } = body;
 
     // 1. Basic field validation
     if (!subject || typeof subject !== 'string' || subject.trim() === '') {
@@ -51,9 +51,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+    if (!recipient || typeof recipient !== 'string' || recipient.trim() === '') {
       return NextResponse.json(
-        { error: 'Recipients list is required and cannot be empty.' },
+        { error: 'Recipient email is required.' },
         { status: 400 }
       );
     }
@@ -72,25 +72,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Clean, deduplicate, and validate emails
-    // Standardize to lowercase and trim
-    const cleanRecipients = recipients.map((r) => String(r).trim().toLowerCase());
-    
-    // Remove duplicates
-    const uniqueRecipients = Array.from(new Set(cleanRecipients)).filter(Boolean);
-
-    if (uniqueRecipients.length > 100) {
+    // 2. Validate recipient format
+    const cleanRecipient = recipient.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(cleanRecipient)) {
       return NextResponse.json(
-        { error: 'Maximum limit of 100 recipients exceeded.' },
-        { status: 400 }
-      );
-    }
-
-    const validRecipients = uniqueRecipients.filter((email) => EMAIL_REGEX.test(email));
-
-    if (validRecipients.length === 0) {
-      return NextResponse.json(
-        { error: 'No valid recipient email addresses found.' },
+        { error: `Invalid recipient email address format: ${cleanRecipient}` },
         { status: 400 }
       );
     }
@@ -108,76 +94,43 @@ export async function POST(req: NextRequest) {
     const resend = new Resend(apiKey);
     const fromEmail = from || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 
-    // 4. Send emails in chunked parallel batches to prevent rate limits and avoid serverless timeouts
-    // Resend allows max 10 requests/second, so we send in small batches with a safe delay
-    const results = [];
-    const concurrencyLimit = 2;
-
-    for (let i = 0; i < validRecipients.length; i += concurrencyLimit) {
-      const chunk = validRecipients.slice(i, i + concurrencyLimit);
-      const chunkPromises = chunk.map(async (email) => {
-        try {
-          const response = await resend.emails.send({
-            from: fromEmail,
-            to: email,
-            replyTo: replyTo || undefined,
-            subject: subject,
-            text: message.replace(/<[^>]*>/g, ''),
-            html: message.trim().startsWith('<')
-              ? message
-              : `
-              <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff; color: #1f2937;">
-                <div style="font-size: 16px; line-height: 1.6; color: #374151;">
-                  ${formatMessageToHtml(message)}
-                </div>
-              </div>
-            `,
-          });
-
-          if (response.error) {
-            return {
-              email,
-              success: false,
-              error: response.error.message || 'Resend failed to deliver the email',
-            };
-          } else {
-            return {
-              email,
-              success: true,
-              id: response.data?.id,
-            };
-          }
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : 'Unknown error occurred while sending';
-          return {
-            email,
-            success: false,
-            error: errorMsg,
-          };
-        }
+    // 4. Send the single email
+    try {
+      const response = await resend.emails.send({
+        from: fromEmail,
+        to: cleanRecipient,
+        replyTo: replyTo || undefined,
+        subject: subject,
+        text: message.replace(/<[^>]*>/g, ''),
+        html: message.trim().startsWith('<')
+          ? message
+          : `
+          <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff; color: #1f2937;">
+            <div style="font-size: 16px; line-height: 1.6; color: #374151;">
+              ${formatMessageToHtml(message)}
+            </div>
+          </div>
+        `,
       });
 
-      const chunkResults = await Promise.all(chunkPromises);
-      results.push(...chunkResults);
-
-      // Add a 1-second delay between chunks to stay safely under Resend's 10 req/sec limit
-      if (i + concurrencyLimit < validRecipients.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (response.error) {
+        return NextResponse.json(
+          { error: response.error.message || 'Resend failed to deliver the email.' },
+          { status: 400 }
+        );
       }
+
+      return NextResponse.json({
+        success: true,
+        id: response.data?.id,
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error occurred while sending';
+      return NextResponse.json(
+        { error: errorMsg },
+        { status: 500 }
+      );
     }
-
-    const successCount = results.filter((r) => r.success).length;
-    const failedCount = results.length - successCount;
-
-    return NextResponse.json({
-      success: true,
-      summary: {
-        total: results.length,
-        successCount,
-        failedCount,
-      },
-      results,
-    });
   } catch (error) {
     console.error('Error in API /api/send:', error);
     const errorMsg = error instanceof Error ? error.message : 'An unexpected error occurred on the server.';

@@ -18,7 +18,8 @@ import {
   Layers,
   Sparkles,
   Info,
-  FileText
+  FileText,
+  History
 } from "lucide-react";
 
 // Email regex for client-side evaluation
@@ -30,6 +31,22 @@ interface RecipientAnalysis {
   valid: string[];
   invalid: string[];
   duplicates: string[];
+  alreadySent: string[];
+}
+
+interface Campaign {
+  id: string;
+  timestamp: string;
+  from: string;
+  replyTo?: string;
+  subject: string;
+  message: string;
+  results: SendResult[];
+  summary: {
+    total: number;
+    successCount: number;
+    failedCount: number;
+  };
 }
 
 interface SendResult {
@@ -86,8 +103,14 @@ export default function Home() {
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
 
+  // Campaign History & Real-time Tracking States
+  const HISTORY_KEY = "bulk_email_sender_history";
+  const [campaignHistory, setCampaignHistory] = useState<Campaign[]>([]);
+  const [sendingProgress, setSendingProgress] = useState<Record<string, "idle" | "sending" | "success" | "failed">>({});
+  const [sendingErrors, setSendingErrors] = useState<Record<string, string>>({});
+
   // UI state
-  const [activeTab, setActiveTab] = useState<"edit" | "preview">("edit");
+  const [activeTab, setActiveTab] = useState<"preview" | "logs" | "history">("preview");
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendResults, setSendResults] = useState<{
@@ -99,7 +122,7 @@ export default function Home() {
   // Toast notifications state
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // 1. Initialize theme and load draft from localStorage
+  // 1. Initialize theme and load draft / history from localStorage
   useEffect(() => {
     // Theme sync
     const savedTheme = localStorage.getItem("theme");
@@ -124,6 +147,16 @@ export default function Home() {
         addToast("Draft restored from your last session", "info");
       } catch (err) {
         console.error("Failed to restore draft:", err);
+      }
+    }
+
+    // Load history
+    const savedHistory = localStorage.getItem(HISTORY_KEY);
+    if (savedHistory) {
+      try {
+        setCampaignHistory(JSON.parse(savedHistory));
+      } catch (err) {
+        console.error("Failed to restore history:", err);
       }
     }
   }, []);
@@ -159,10 +192,63 @@ export default function Home() {
     }
   };
 
+  // Memoized set of all successfully sent emails in history
+  const successfullySentEmails = useMemo(() => {
+    const set = new Set<string>();
+    campaignHistory.forEach((c) => {
+      c.results.forEach((r) => {
+        if (r.success) {
+          set.add(r.email.toLowerCase());
+        }
+      });
+    });
+    return set;
+  }, [campaignHistory]);
+
+  // Exclude previously sent helper
+  const excludeAlreadySent = () => {
+    const rawLines = recipientsText.split("\n");
+    const remainingLines = rawLines.filter((line) => {
+      const trimmed = line.trim().toLowerCase();
+      if (!EMAIL_REGEX.test(trimmed)) return true; // keep invalid lines so user can fix
+      return !successfullySentEmails.has(trimmed);
+    });
+    setRecipientsText(remainingLines.join("\n"));
+    addToast(`Filtered out successfully sent emails!`, "success");
+  };
+
+  // History action helpers
+  const loadCampaignDraft = (camp: Campaign) => {
+    setFrom(camp.from);
+    setReplyTo(camp.replyTo || "");
+    setSubject(camp.subject);
+    setMessage(camp.message);
+    addToast("Campaign template loaded back into form!", "success");
+  };
+
+  const deleteCampaign = (id: string) => {
+    if (confirm("Are you sure you want to delete this campaign from history?")) {
+      setCampaignHistory((prev) => {
+        const updated = prev.filter((c) => c.id !== id);
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+        return updated;
+      });
+      addToast("Campaign deleted", "info");
+    }
+  };
+
+  const clearAllHistory = () => {
+    if (confirm("Are you sure you want to clear the entire campaign history? This cannot be undone.")) {
+      setCampaignHistory([]);
+      localStorage.removeItem(HISTORY_KEY);
+      addToast("History cleared", "info");
+    }
+  };
+
   // 3. Live analysis of recipients
   const analysis = useMemo<RecipientAnalysis>(() => {
     if (!recipientsText.trim()) {
-      return { raw: [], valid: [], invalid: [], duplicates: [] };
+      return { raw: [], valid: [], invalid: [], duplicates: [], alreadySent: [] };
     }
 
     const rawLines = recipientsText
@@ -173,6 +259,7 @@ export default function Home() {
     const validEmails: string[] = [];
     const invalidEmails: string[] = [];
     const duplicateEmails: string[] = [];
+    const alreadySentEmails: string[] = [];
     const seen = new Set<string>();
 
     rawLines.forEach((email) => {
@@ -184,6 +271,9 @@ export default function Home() {
       } else {
         seen.add(lowerEmail);
         validEmails.push(email);
+        if (successfullySentEmails.has(lowerEmail)) {
+          alreadySentEmails.push(email);
+        }
       }
     });
 
@@ -192,8 +282,9 @@ export default function Home() {
       valid: validEmails,
       invalid: invalidEmails,
       duplicates: duplicateEmails,
+      alreadySent: alreadySentEmails,
     };
-  }, [recipientsText]);
+  }, [recipientsText, successfullySentEmails]);
 
   // Copy helper
   const copyToClipboard = (text: string, successMessage: string) => {
@@ -279,55 +370,112 @@ export default function Home() {
   const executeSend = async () => {
     setShowConfirmModal(false);
     setIsSending(true);
+    setActiveTab("logs");
     setSendResults(null);
+    
+    // Reset individual email trackers
+    const initialProgress: Record<string, "idle" | "sending" | "success" | "failed"> = {};
+    analysis.valid.forEach(email => {
+      initialProgress[email] = "idle";
+    });
+    setSendingProgress(initialProgress);
+    setSendingErrors({});
 
-    addToast("Initializing bulk email job...", "info");
+    addToast("Starting real-time broadcast...", "info");
 
-    try {
-      const response = await fetch("/api/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from,
-          replyTo,
-          subject,
-          message,
-          recipients: analysis.valid,
-        }),
+    const total = analysis.valid.length;
+    const tempResults: SendResult[] = [];
+    
+    // Concurrency limit of 2 parallel requests
+    const concurrencyLimit = 2;
+    
+    for (let i = 0; i < total; i += concurrencyLimit) {
+      const chunk = analysis.valid.slice(i, i + concurrencyLimit);
+      
+      // Update state for chunk to 'sending'
+      setSendingProgress(prev => {
+        const next = { ...prev };
+        chunk.forEach(email => {
+          next[email] = "sending";
+        });
+        return next;
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to process emails on server.");
-      }
-
+      
+      const chunkPromises = chunk.map(async (email) => {
+        try {
+          const response = await fetch("/api/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              from,
+              replyTo,
+              subject,
+              message,
+              recipient: email,
+            }),
+          });
+          
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "Delivery failed");
+          }
+          
+          setSendingProgress(prev => ({ ...prev, [email]: "success" }));
+          return { email, success: true, id: data.id };
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : "Unknown error";
+          setSendingProgress(prev => ({ ...prev, [email]: "failed" }));
+          setSendingErrors(prev => ({ ...prev, [email]: errorMsg }));
+          return { email, success: false, error: errorMsg };
+        }
+      });
+      
+      const chunkResults = await Promise.all(chunkPromises);
+      tempResults.push(...chunkResults);
+      
+      // Update intermediate send results
       setSendResults({
-        successCount: data.summary.successCount,
-        failedCount: data.summary.failedCount,
-        results: data.results,
+        successCount: tempResults.filter(r => r.success).length,
+        failedCount: tempResults.filter(r => !r.success).length,
+        results: [...tempResults],
       });
-
-      if (data.summary.failedCount === 0) {
-        addToast(`Successfully broadcasted emails to all ${data.summary.successCount} recipients!`, "success");
-      } else {
-        addToast(`Completed with warnings: ${data.summary.successCount} sent, ${data.summary.failedCount} failed.`, "warning");
+      
+      // Wait 1 second (1000ms) between batches to stay comfortably within rate limits
+      if (i + concurrencyLimit < total) {
+        await new Promise(r => setTimeout(r, 1000));
       }
-    } catch (err) {
-      console.error("Broadcasting error:", err);
-      const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
-      addToast(errorMsg, "error");
-      setSendResults({
-        successCount: 0,
-        failedCount: analysis.valid.length,
-        results: analysis.valid.map((email) => ({
-          email,
-          success: false,
-          error: errorMsg,
-        })),
-      });
-    } finally {
-      setIsSending(false);
+    }
+    
+    // Save to history on completion
+    const finalSuccessCount = tempResults.filter(r => r.success).length;
+    const finalFailedCount = tempResults.filter(r => !r.success).length;
+    
+    const newCampaign: Campaign = {
+      id: Date.now().toString(),
+      timestamp: new Date().toLocaleString(),
+      from: from || "Default (Onboarding)",
+      replyTo: replyTo || undefined,
+      subject: subject,
+      message: message,
+      results: tempResults,
+      summary: {
+        total,
+        successCount: finalSuccessCount,
+        failedCount: finalFailedCount,
+      }
+    };
+    
+    setCampaignHistory(prev => {
+      const updated = [newCampaign, ...prev];
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+      return updated;
+    });
+    
+    setIsSending(false);
+    if (finalFailedCount === 0) {
+      addToast(`Successfully broadcasted emails to all ${finalSuccessCount} recipients!`, "success");
+    } else {
+      addToast(`Broadcast complete: ${finalSuccessCount} sent, ${finalFailedCount} failed.`, "warning");
     }
   };
 
@@ -373,33 +521,33 @@ export default function Home() {
 
       {/* Confirmation Modal */}
       {showConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md px-4">
-          <div className="glass-panel max-w-md w-full rounded-2xl p-6 border-slate-200/10 shadow-2xl animate-glow">
-            <div className="flex items-center gap-3 text-indigo-400 mb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm px-4">
+          <div className="max-w-md w-full rounded-2xl p-6 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl text-slate-900 dark:text-slate-100 transition-all animate-glow">
+            <div className="flex items-center gap-3 text-indigo-500 dark:text-indigo-400 mb-4">
               <Layers size={24} />
               <h3 className="text-xl font-bold font-display">Confirm Email Broadcast</h3>
             </div>
-            <p className="text-sm text-slate-300 mb-6 leading-relaxed">
+            <p className="text-sm text-slate-600 dark:text-slate-300 mb-6 leading-relaxed">
               You are about to launch a bulk email campaign. Review details below:
             </p>
-            <div className="space-y-3 bg-slate-900/50 rounded-xl p-4 border border-slate-800/40 mb-6 text-sm">
+            <div className="space-y-3 bg-slate-100 dark:bg-slate-950/50 rounded-xl p-4 border border-slate-200 dark:border-slate-800 mb-6 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-400">From Address:</span>
-                <span className="font-mono text-slate-200">{from || "Default (Onboarding)"}</span>
+                <span className="text-slate-500 dark:text-slate-400">From Address:</span>
+                <span className="font-mono text-slate-800 dark:text-slate-200 font-semibold">{from || "Default (Onboarding)"}</span>
               </div>
               {replyTo && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Reply-To:</span>
-                  <span className="font-mono text-slate-200">{replyTo}</span>
+                  <span className="text-slate-500 dark:text-slate-400">Reply-To:</span>
+                  <span className="font-mono text-slate-800 dark:text-slate-200 font-semibold">{replyTo}</span>
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-slate-400">Subject:</span>
-                <span className="font-semibold text-slate-200 truncate max-w-[200px]">{subject}</span>
+                <span className="text-slate-500 dark:text-slate-400">Subject:</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[200px]">{subject}</span>
               </div>
-              <div className="flex justify-between border-t border-slate-800/60 pt-2 mt-2">
-                <span className="text-slate-400 font-semibold">Valid Recipients:</span>
-                <span className="font-bold text-emerald-400 font-display text-base">
+              <div className="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-2 mt-2">
+                <span className="text-slate-500 dark:text-slate-400 font-semibold">Valid Recipients:</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400 font-display text-base">
                   {analysis.valid.length} emails
                 </span>
               </div>
@@ -407,7 +555,7 @@ export default function Home() {
             <div className="flex gap-3 justify-end text-sm">
               <button
                 onClick={() => setShowConfirmModal(false)}
-                className="px-4 py-2.5 rounded-lg border border-slate-700 bg-slate-800/50 hover:bg-slate-800 text-slate-300 font-semibold transition-colors"
+                className="px-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-850 text-slate-700 dark:text-slate-300 font-semibold transition-colors"
               >
                 Cancel
               </button>
@@ -536,6 +684,25 @@ export default function Home() {
                       Warning: 100 recipient limit exceeded (Current: {analysis.raw.length})
                     </div>
                   )}
+
+                  {analysis.alreadySent.length > 0 && (
+                    <div className="mt-2 p-2.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle size={14} className="flex-shrink-0" />
+                        <span>
+                          {analysis.alreadySent.length} recipient{analysis.alreadySent.length > 1 ? 's' : ''} have already been successfully emailed in past campaigns.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={excludeAlreadySent}
+                        className="self-end sm:self-auto px-2 py-1 text-[10px] font-bold rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-colors flex items-center gap-1"
+                      >
+                        <Trash2 size={10} />
+                        Filter Out Already Sent
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Email Analytics Badges */}
@@ -651,9 +818,9 @@ export default function Home() {
               <div className="flex border-b border-slate-800 bg-slate-900/40 p-1.5 gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setActiveTab("edit")}
+                  onClick={() => setActiveTab("preview")}
                   className={`flex-1 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
-                    activeTab === "edit"
+                    activeTab === "preview"
                       ? "bg-slate-800 text-slate-100 shadow"
                       : "text-slate-400 hover:text-slate-200"
                   }`}
@@ -663,10 +830,10 @@ export default function Home() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveTab("preview")}
-                  disabled={!sendResults}
+                  onClick={() => setActiveTab("logs")}
+                  disabled={!sendResults && !isSending}
                   className={`flex-1 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all disabled:opacity-40 ${
-                    activeTab === "preview"
+                    activeTab === "logs"
                       ? "bg-slate-800 text-slate-100 shadow"
                       : "text-slate-400 hover:text-slate-200"
                   }`}
@@ -674,9 +841,21 @@ export default function Home() {
                   <CheckCircle2 size={13} />
                   Delivery Log
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("history")}
+                  className={`flex-1 py-2 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
+                    activeTab === "history"
+                      ? "bg-slate-800 text-slate-100 shadow"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <History size={13} />
+                  History
+                </button>
               </div>
 
-              {activeTab === "edit" ? (
+              {activeTab === "preview" && (
                 /* Interactive Email Preview Window */
                 <div className="p-4 bg-slate-900/10">
                   <div className="flex items-center gap-1.5 text-xs text-slate-400 font-semibold mb-3">
@@ -720,19 +899,23 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-              ) : (
+              )}
+
+              {activeTab === "logs" && (
                 /* Delivery Logs and Statistics */
                 <div className="p-4 space-y-4">
-                  {sendResults && (
+                  {(sendResults || isSending) && (
                     <>
                       <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                         <div>
-                          <div className="text-xs text-slate-400">Delivery Status</div>
+                          <div className="text-xs text-slate-400">
+                            {isSending ? "Sending Broadcast..." : "Delivery Status"}
+                          </div>
                           <div className="text-base font-bold font-display text-slate-200 mt-0.5">
-                            {sendResults.successCount} Successful, {sendResults.failedCount} Failed
+                            {sendResults ? `${sendResults.successCount} Successful, ${sendResults.failedCount} Failed` : "Initializing..."}
                           </div>
                         </div>
-                        {sendResults.failedCount > 0 && (
+                        {sendResults && sendResults.failedCount > 0 && !isSending && (
                           <button
                             onClick={exportFailedAsCSV}
                             className="px-2.5 py-1 text-[11px] font-semibold rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 text-amber-400 flex items-center gap-1 transition-all"
@@ -743,40 +926,175 @@ export default function Home() {
                         )}
                       </div>
 
+                      {/* Live Progress Bar */}
+                      {isSending && (
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                            <span>Progress</span>
+                            <span>{sendResults?.results?.length || 0} / {analysis.valid.length}</span>
+                          </div>
+                          <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800/40">
+                            <div
+                              className="bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 h-full transition-all duration-300 animate-progress"
+                              style={{ width: `${((sendResults?.results?.length || 0) / analysis.valid.length) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
                       {/* Recipient breakdown logs */}
                       <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
-                        {sendResults.results.map((result, idx) => (
-                          <div
-                            key={idx}
-                            className={`p-2.5 rounded-lg border text-xs flex items-center justify-between gap-3 ${
-                              result.success
-                                ? "bg-emerald-500/5 border-emerald-500/10 text-slate-300"
-                                : "bg-rose-500/5 border-rose-500/10 text-rose-300"
-                            }`}
-                          >
-                            <div className="flex-1 min-w-0">
-                              <div className="font-mono font-medium truncate">{result.email}</div>
-                              {!result.success && result.error && (
-                                <div className="text-[10px] text-rose-400/80 mt-0.5">
-                                  {result.error}
-                                </div>
-                              )}
+                        {analysis.valid.map((email) => {
+                          const status = sendingProgress[email] || "idle";
+                          const error = sendingErrors[email];
+                          
+                          return (
+                            <div
+                              key={email}
+                              className={`p-2.5 rounded-lg border text-xs flex items-center justify-between gap-3 ${
+                                status === "success"
+                                  ? "bg-emerald-500/5 border-emerald-500/10 text-slate-300"
+                                  : status === "failed"
+                                  ? "bg-rose-500/5 border-rose-500/10 text-rose-300"
+                                  : status === "sending"
+                                  ? "bg-indigo-500/5 border-indigo-500/15 text-indigo-300"
+                                  : "bg-slate-900/30 border-slate-850 text-slate-500"
+                              }`}
+                            >
+                              <div className="flex-1 min-w-0">
+                                <div className="font-mono font-medium truncate">{email}</div>
+                                {status === "failed" && error && (
+                                  <div className="text-[10px] text-rose-400/80 mt-0.5">
+                                    {error}
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                {status === "success" && (
+                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-0.5">
+                                    <Check size={9} /> Sent
+                                  </span>
+                                )}
+                                {status === "failed" && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-0.5">
+                                    Failed
+                                  </span>
+                                )}
+                                {status === "sending" && (
+                                  <span className="px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                                    <RefreshCw size={9} className="animate-spin" /> Sending
+                                  </span>
+                                )}
+                                {status === "idle" && (
+                                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+                                    Queued
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div>
-                              {result.success ? (
-                                <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-0.5">
-                                  <Check size={9} /> Sent
-                                </span>
-                              ) : (
-                                <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-0.5">
-                                  Failed
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </>
+                  )}
+                </div>
+              )}
+
+              {activeTab === "history" && (
+                /* Campaign History Window */
+                <div className="p-4 space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <div>
+                      <div className="text-xs text-slate-400">Broadcast History</div>
+                      <div className="text-base font-bold font-display text-slate-200 mt-0.5">
+                        {campaignHistory.length} Campaigns Saved
+                      </div>
+                    </div>
+                    {campaignHistory.length > 0 && (
+                      <button
+                        onClick={clearAllHistory}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/20 text-rose-400 flex items-center gap-1 transition-all"
+                      >
+                        <Trash2 size={11} />
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+
+                  {campaignHistory.length === 0 ? (
+                    <div className="text-center py-8 text-xs text-slate-500 italic">
+                      No broadcast campaigns in history yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                      {campaignHistory.map((camp) => (
+                        <div key={camp.id} className="border border-slate-850 bg-slate-900/40 rounded-xl p-3.5 space-y-3">
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="min-w-0">
+                              <h4 className="font-bold text-sm text-slate-200 truncate" title={camp.subject}>
+                                {camp.subject}
+                              </h4>
+                              <div className="text-[10px] text-slate-500 mt-0.5">{camp.timestamp}</div>
+                            </div>
+                            <button
+                              onClick={() => deleteCampaign(camp.id)}
+                              className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                              title="Delete campaign"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                            <div className="bg-slate-950/40 p-1.5 rounded-lg">
+                              <div className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">Total</div>
+                              <div className="font-semibold text-slate-200 mt-0.5">{camp.summary.total}</div>
+                            </div>
+                            <div className="bg-emerald-500/5 p-1.5 rounded-lg border border-emerald-500/10">
+                              <div className="text-[9px] text-emerald-400/80 uppercase tracking-wider font-semibold">Sent</div>
+                              <div className="font-semibold text-emerald-400 mt-0.5">{camp.summary.successCount}</div>
+                            </div>
+                            <div className="bg-rose-500/5 p-1.5 rounded-lg border border-rose-500/10">
+                              <div className="text-[9px] text-rose-400/80 uppercase tracking-wider font-semibold">Failed</div>
+                              <div className="font-semibold text-rose-400 mt-0.5">{camp.summary.failedCount}</div>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end gap-2 text-xs pt-1">
+                            <button
+                              onClick={() => loadCampaignDraft(camp)}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 flex items-center gap-1 transition-all"
+                            >
+                              Reuse Template
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSendResults({
+                                  successCount: camp.summary.successCount,
+                                  failedCount: camp.summary.failedCount,
+                                  results: camp.results,
+                                });
+                                // Synthesize sendingProgress for visual render in logs tab
+                                const prog: Record<string, "idle" | "sending" | "success" | "failed"> = {};
+                                const errs: Record<string, string> = {};
+                                camp.results.forEach((r) => {
+                                  prog[r.email] = r.success ? "success" : "failed";
+                                  if (!r.success && r.error) {
+                                    errs[r.email] = r.error;
+                                  }
+                                });
+                                setSendingProgress(prog);
+                                setSendingErrors(errs);
+                                setActiveTab("logs");
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 flex items-center gap-1 transition-all"
+                            >
+                              View logs
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}
