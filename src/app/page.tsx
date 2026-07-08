@@ -113,6 +113,7 @@ export default function Home() {
   // UI state
   const [activeTab, setActiveTab] = useState<"preview" | "logs" | "history">("preview");
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showSendingModal, setShowSendingModal] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sendResults, setSendResults] = useState<{
     successCount: number;
@@ -390,6 +391,7 @@ export default function Home() {
 
   const executeSend = async () => {
     setShowConfirmModal(false);
+    setShowSendingModal(true);
     setIsSending(true);
     setActiveTab("logs");
     setSendResults(null);
@@ -505,6 +507,158 @@ export default function Home() {
       {/* Background decoration */}
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/10 blur-[120px] pointer-events-none animate-glow" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-purple-500/10 blur-[120px] pointer-events-none animate-glow" />
+
+      {/* Sending Progress Modal */}
+      {showSendingModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
+          <div className="max-w-2xl w-full rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl text-slate-100 flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                {isSending ? (
+                  <RefreshCw size={20} className="text-indigo-400 animate-spin" />
+                ) : (
+                  <CheckCircle2 size={20} className={sendResults && sendResults.failedCount === 0 ? "text-emerald-400" : "text-amber-400"} />
+                )}
+                <div>
+                  <h3 className="text-lg font-bold font-display">
+                    {isSending ? "Broadcasting Emails..." : "Broadcast Complete"}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {isSending
+                      ? `Sending to ${analysis.valid.length} recipients — please don't close this window`
+                      : sendResults
+                        ? `${sendResults.successCount} sent, ${sendResults.failedCount} failed`
+                        : ""}
+                  </p>
+                </div>
+              </div>
+              {!isSending && (
+                <button
+                  onClick={() => setShowSendingModal(false)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+
+            {/* Progress Bar */}
+            <div className="px-6 py-3 border-b border-slate-800/60">
+              <div className="flex justify-between text-[10px] text-slate-400 font-semibold uppercase tracking-wider mb-1.5">
+                <span>Progress</span>
+                <span>{sendResults?.results?.length || 0} / {analysis.valid.length}</span>
+              </div>
+              <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800/40">
+                <div
+                  className="bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 h-full transition-all duration-300 animate-progress"
+                  style={{ width: `${((sendResults?.results?.length || 0) / Math.max(analysis.valid.length, 1)) * 100}%` }}
+                />
+              </div>
+              {/* Stats Row */}
+              <div className="flex gap-4 mt-2.5 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                  <span className="text-slate-400">Sent:</span>
+                  <span className="font-bold text-emerald-400">{sendResults?.successCount || 0}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-rose-400" />
+                  <span className="text-slate-400">Failed:</span>
+                  <span className="font-bold text-rose-400">{sendResults?.failedCount || 0}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-slate-500" />
+                  <span className="text-slate-400">Queued:</span>
+                  <span className="font-bold text-slate-300">
+                    {analysis.valid.length - (sendResults?.results?.length || 0)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Scrollable Email List */}
+            <div className="flex-1 overflow-y-auto px-6 py-3 space-y-1.5 min-h-0">
+              {analysis.valid.map((email) => {
+                const status = sendingProgress[email] || "idle";
+                const error = sendingErrors[email];
+
+                return (
+                  <div
+                    key={email}
+                    className={`px-3 py-2 rounded-lg border text-xs flex items-center justify-between gap-3 transition-all duration-200 ${
+                      status === "success"
+                        ? "bg-emerald-500/5 border-emerald-500/15 text-slate-200"
+                        : status === "failed"
+                        ? "bg-rose-500/5 border-rose-500/15 text-rose-200"
+                        : status === "sending"
+                        ? "bg-indigo-500/8 border-indigo-500/20 text-indigo-200"
+                        : "bg-slate-900/30 border-slate-800/50 text-slate-500"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="font-mono font-medium truncate">{email}</div>
+                      {status === "failed" && error && (
+                        <div className="text-[10px] text-rose-400/80 mt-0.5 truncate">{error}</div>
+                      )}
+                    </div>
+                    <div className="flex-shrink-0">
+                      {status === "success" && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                          <Check size={9} /> Sent
+                        </span>
+                      )}
+                      {status === "failed" && (
+                        <span className="px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 text-[10px] font-bold uppercase tracking-wider">
+                          Failed
+                        </span>
+                      )}
+                      {status === "sending" && (
+                        <span className="px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                          <RefreshCw size={9} className="animate-spin" /> Sending
+                        </span>
+                      )}
+                      {status === "idle" && (
+                        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-bold uppercase tracking-wider">
+                          Queued
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Modal Footer */}
+            {!isSending && sendResults && (
+              <div className="px-6 py-3 border-t border-slate-800 flex items-center justify-between">
+                <div className="text-xs text-slate-400">
+                  {sendResults.failedCount > 0
+                    ? `${sendResults.failedCount} email${sendResults.failedCount > 1 ? "s" : ""} failed to deliver`
+                    : "All emails delivered successfully!"}
+                </div>
+                <div className="flex gap-2">
+                  {sendResults.failedCount > 0 && (
+                    <button
+                      onClick={exportFailedAsCSV}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/15 flex items-center gap-1 transition-colors"
+                    >
+                      <Download size={12} />
+                      Export Failed
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowSendingModal(false)}
+                    className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Floating Toast Container */}
       <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
